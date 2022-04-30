@@ -85,11 +85,12 @@ int main(int argc, char* argv[]){
   atomic<int> ctr_detectedBrick (1); 
   atomic<int> itr_detectedBrick (0); 
 
-  detectedBrick *detected_Bricks(new detectedBrick[itr_detectedBrick]());
-  vector<detectedBrick> detected_Bricks;
-  detected_Bricks.clear();
+  detectedBrick *detected_Bricks=(new detectedBrick[itr_detectedBrick]());
+  //vector<detectedBrick> detected_Bricks;
+  //detected_Bricks.clear();
 
   vector<thread> thr_compute;
+  
   thr_compute.clear();
 
   ros::Subscriber coordSub=node.subscribe<detect::cord>("/kinects/coordinate", 11, boost::bind(cord_callback, _1, &detected_Bricks[itr_detectedBrick]));
@@ -276,7 +277,7 @@ void cord_callback(const detect::cord::ConstPtr& msg, detectedBrick* Brick){
     cout<<" "<<Brick->boundBox[X_MAX-1]<<" "<<Brick->boundBox[Y_MAX-1]<<" ";
 
     Brick->boundBox[CEN_X-1]=(int)msg->coordinate[CEN_X]; 
-    Brick->boundBox[CEN_Y]-1=(int)msg->coordinate[CEN_Y];
+    Brick->boundBox[CEN_Y-1]=(int)msg->coordinate[CEN_Y];
     cout<< Brick->boundBox[CEN_X-1]<<" "<<Brick->boundBox[CEN_Y-1]<<" ";
 
     Brick->x=BRICKS[Brick->name].x;
