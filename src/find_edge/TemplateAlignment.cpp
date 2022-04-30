@@ -14,7 +14,7 @@
 using namespace std;
 
 TemplateAlignment::TemplateAlignment()
-    : min_sample_distance_(0.05f), max_correspondence_distance_(0.01f * 0.01f),
+    : min_sample_distance_(0.01f), max_correspondence_distance_(0.01f * 0.01f),
       nr_iterations_(500) {
   sac_ia_.setMinSampleDistance(min_sample_distance_);
   sac_ia_.setMaxCorrespondenceDistance(max_correspondence_distance_);

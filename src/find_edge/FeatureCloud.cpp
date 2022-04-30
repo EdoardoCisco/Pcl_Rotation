@@ -16,8 +16,8 @@
 using namespace std;
 
 FeatureCloud::FeatureCloud()
-    : search_method_xyz_(new SearchMethod), normal_radius_(0.02f),
-      feature_radius_(0.02f) {}
+    : search_method_xyz_(new SearchMethod), normal_radius_(0.12f),
+      feature_radius_(0.12f) {}
 
 FeatureCloud::~FeatureCloud() {}
 

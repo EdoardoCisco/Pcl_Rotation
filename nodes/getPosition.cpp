@@ -1,188 +1,230 @@
-#include <find_edge/brick.h> // tipo messaggio per motion
-#include <find_edge/cord.h> // tipo messaggio per cord ricevute da yolo
-#include "find_edge/FeatureCloud.h" // classe featureCloude per salvare cloud Brick
-#include "find_edge/TemplateAlignment.h" // classe per fare confronto
-#include "find_edge/pcdFileStore.h"  // classe per salvare .pcd  vector<vector<FeaureCloud>>
-#include "find_edge/BrickDimension.h" // HardCoded dimension dei brick
+//ros and in-code package includes
 #include <ros/ros.h>
-#include <sensor_msgs/PointCloud2.h>  // tipo messaggio per pointCloud2
-#include <pcl_conversions/pcl_conversions.h>  // ridondante contenuta anche in FeatureCloud e TemplateCloud
-#include <boost/bind.hpp> // per passare una funzione con due argomenti ad una chiamata che prende solo funzione
-                          // ros::subscriber e publischer
+#include <find_edge/brick.h> 
+#include <detect/cord.h> 
+#include "find_edge/FeatureCloud.h" 
+#include "find_edge/TemplateAlignment.h"
+#include "find_edge/pcdFileStore.h"
+#include "find_edge/BrickDimension.h"
+#include <sensor_msgs/PointCloud2.h> 
+//in-code includes
+#include <boost/bind.hpp> 
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <Eigen/Dense>
+//pcl includes
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/segmentation/extract_clusters.h>
+#include <pcl/common/centroid.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl_ros/point_cloud.h>
 
-#define LOADFILE "listFileClassPcd.txt" //.txt per caricare .pcd delle classi
-#define COMPONENTS 3 // numero componeti di un vettore
-#define BOUNDBOX 4 // valori del boundbox
-#define NAME 0 // posizione della classe nel messaggio da yolo cord.msg
-#define X_MIN 1 // posizione x_min boundbox da messaggio yolo
-#define Y_MIN 2 // vedi sopra
-#define X_MAX 3 // vedi sopra
-#define Y_MAX 4 // vedi sopra
 
+#define LOADFILE "BRICKS/listFileClassPcd.txt"
+#define RADIUS 0.08
+#define COMPONENTS 6 
+#define BOUNDBOX 6 
+#define NAME 0 
+#define X_MIN 1 
+#define Y_MIN 2 
+#define X_MAX 3
+#define Y_MAX 4
+#define CEN_X 5
+#define CEN_Y 6
+#define PI 3.141592653589
 
-//struct per definizione bricks
+//pcl::io::savePCDFile
+
 typedef struct{
-    int name; //classe del blocco
-    FeatureCloud cloud; // nuvola che rappresenta il blocco
-    float boundBox[BOUNDBOX]; // boundbox del brick
-    float initPosition[COMPONENTS]; // posizione iniziale da computare
-    float finalPosition[COMPONENTS]; // posizione finale da computare half-HardCoded
-    float initRotation[COMPONENTS]; // rotazione iniziale da computare
-    float finalRotation[COMPONENTS]; // rotazione finale HardCoded --> ogni blocco ha un fronte,retro, sopra, sotto
-    float x; // dimensione x del blocco
-    float y; // dimensione y del blocco
-    float z; // dimensione z del blocco
+    int name;
+    //pcl::PointCloud<pcl::PointXYZ>::Ptr cloud ( new pcl::PointCloud<pcl::PointXYZ> ());
+    int boundBox[BOUNDBOX]; 
+    float initPosition[COMPONENTS]; 
+    float initRotation[COMPONENTS]; 
+    float x; 
+    float y;
+    float z;
 }detectedBrick;
 
-//int ctr_detectedBrick=1;
-//int itr_detectedBrick=0;
-//detectedBrick *detected_Bricks=new detectedBrick[ctr_detectedBrick]();
 
-//const float CAMERA_POSITION[COMPONENTS]=[]; // posizione della camera su gazebo
-                                              // utilizzata per computare la distanza dei blocchi dalla
-                                              // posizione del braccio che e' [x=0,y=0,z=0]
+//const float CAMERA_POSITION[COMPONENTS]=[]; 
+//const float CAMERA_ANGLE=; 
+StoreClass STORE_PCD_TEMPLATES(LOADFILE);
+atomic<bool> semaforo (false);
+mutex mtx;
+mutex mtx_brick_map;
+mutex mtx_brick_struct;
 
-//const float CAMERA_ANGLE=; // rotazione della camera rispetto al piano, serve per computare distanza come per coordinate
+void cord_callback(const detect::cord::ConstPtr&, detectedBrick*); 
+void cloud_callback(const sensor_msgs::PointCloud2::ConstPtr&, pcl::PointCloud<pcl::PointXYZ>::Ptr); 
+void computePosition( pcl::PointCloud<pcl::PointXYZ>::ConstPtr, detectedBrick*, const ros::Publisher*); 
+//void computePosition( pcl::PointCloud<pcl::PointXYZ>::ConstPtr, vector<detectedBrick>*, const ros::Publisher*); 
+//find_edge::brick getMSG(const detectedBrick);
 
-StoreClass STORE_PCD_TEMPLATES(LOADFILE); //classe alla cui creazione viene passato
-                                                //il file .txt conntenete a sua volta i nomi
-                                                //.txt contenenti i file .pcd per ogni classe
-                                                // vector<vector<FeatureCloud>> e' quello
-                                                //che la classe contiene 
-
-
-/*****SE LE CALLBACK SONO CON SINGOLO PARAMETRO DEVO DICHIARARE DELLE VARIABILI GLOBALI****/
-                /*****MI FAREBBE PARECCHIO SCHIFO*****/
-//void cordCallback(const find_edge::cord::ConstPtr&); // callback con singolo argomento
-void cord_Callback(const find_edge::cord::ConstPtr&, detectedBrick* ); // callBack per la gestione e ricezione dei messaggi
-                                                      // da parte del nodo che compie riconoscimento,
-                                                      // ricevo messaggio contenete un singolo array di float[5] 
-                                                      //contenete in pos 0 nome [classe 0-10], [1-4] boundbox
-                                                      //vedi define NAME X_MIN......
-
-
-
-//void depthCallback(const sensor_msgs::PointCloud2::ConstPtr& ); // singolo argomento
-void depth_Callback(const sensor_msgs::PointCloud2::ConstPtr&, detectedBrick* ); // callBack per estrarre i cloud corrispondenti ai blocchi
-                                                                                // esegue anche chiamata a computePosition
-                                                                                // per copiare i dati sul messaggio da publicare
-
-
-
-void computePosition(detectedBrick*); // funzione che computa rotazione assoluta, e posizione fianle per il blocco passato
-find_edge::brick getMSG(const detectedBrick);
 
 int main(int argc, char* argv[]){
   
   ros::init(argc,argv,"detect");
   ros::NodeHandle node;
-
-  FeatureCloud prova;   //test
-  TemplateAlignment prova2;//test
-
-  int ctr_detectedBrick=1; // contatore per numero messaggi ricevuti da yolo
-  int itr_detectedBrick=0;// iteratore per gestire la creazione dinamica di struct detectedBrick 
-                          // viene aumentato alla ricezione di un nuovo messaggio da parte di yolo
-                          // se uso subscriber con 1 argomento diventa globale
-
-  detectedBrick *detected_Bricks=new detectedBrick[ctr_detectedBrick](); // array dinamico per la creazione di
-                                                            // struct per poi poter scrivere messaggio
-                                                            // da inviare a motion plan
-                                                            // se uso subscriber con 1 argomento diventa globale
   
-  //subscriber callback con due argomenti
-  //ros::Subscriber coordSub=node.subscribe<const find_edge::cord >("/kinect/coordinates", 11, boost::bind(cord_Callback, _1, detected_Bricks[itr_detectedBrick]));
-  //ros::Subscriber coordSub=node.subscribe("/kinect/coordinates",11,cordCallback); // singolo argomento
+  pcl::PointCloud<pcl::PointXYZ>::Ptr brick_map (new pcl::PointCloud<pcl::PointXYZ>);
+
+  ros::Publisher posPub = node.advertise<find_edge::brick>("motion/plan", 11);
+  ros::Subscriber cloudSub=node.subscribe<sensor_msgs::PointCloud2>("/camera/depth/points", 2, boost::bind(cloud_callback, _1, *(&brick_map)));
+    
+  ros::Rate loop(10);
+  while(brick_map->empty()){
+    ros::spinOnce();
+    cout<<"loop\n";
+    loop.sleep();
+  }
+  cloudSub.shutdown();
+
+  atomic<int> ctr_detectedBrick (1); 
+  atomic<int> itr_detectedBrick (0); 
+
+  detectedBrick *detected_Bricks(new detectedBrick[itr_detectedBrick]());
+  vector<detectedBrick> detected_Bricks;
+  detected_Bricks.clear();
+
+  vector<thread> thr_compute;
+  thr_compute.clear();
+
+  ros::Subscriber coordSub=node.subscribe<detect::cord>("/kinects/coordinate", 11, boost::bind(cord_callback, _1, &detected_Bricks[itr_detectedBrick]));
 
   while(ros::ok()){
     ros::spinOnce();
-    ctr_detectedBrick+=1;
-    itr_detectedBrick+=1;
-  }
-  //coordSub.shutdown();// chiudo subscriber al topic di yolo succede dopo che ho ricevuto una volta tutti i messaggi
-                      // ricevo tutti i messaggi solo una volta perche' una volta inviati i messaggi da yolo il nodo
-                      // chude il topic (parte di gio) --> esco dal loop
-  itr_detectedBrick=0; // pongo iteratore a 0 per ricominciare le chiamare
-  
-  ros::Subscriber depthSub=node.subscribe<sensor_msgs::PointCloud2>("/camera/depth/points", 2, boost::bind(depth_Callback, _1, &detected_Bricks[itr_detectedBrick])); 
-  //ros::Subscriber depthSub=node.subscribe("/camera/depth/points", 1, depth_Callback); // mi collego al topic del kinect 
-                                                                                      // e passo alla callback il brick su 
-                                                                                      // cui trovare le info di posizione
-                                                                                      
-ros::Publisher posPub = node.advertise<find_edge::cord>("motion/plan", 11); // topic dove publico ad ogni ciclo le info del cubo appena computato
- /****MUTEX*****/
-  while(itr_detectedBrick < ctr_detectedBrick){  
-    ros::spinOnce(); // faccio un giro leggendo dal topic che pubblica pointCloud2 e faccio tutte le cose del caso
-    find_edge::brick msg=getMSG(detected_Bricks[itr_detectedBrick]); // copio i dati dall'ultimo brick elaborato al tipo messaggio
-    posPub.publish(msg); // pubblico il messaggio
-    itr_detectedBrick+=1;
-  }
-  depthSub.shutdown();
-  //posPub.shutdown(); // prima di chudere topic devo aspettare che tutti i messaggi siano stati letti
-    delete detected_Bricks;
-    return 0;
-}
-
-void cord_Callback(const find_edge::cord::ConstPtr& msg, detectedBrick* Brick){
-                        // classe del blocco da yolo
-    //detected_Bricks[itr-1].name=(int)msg->coordinate[NAME];// senza argomento detected_Bricks globale
-    Brick->name=(int)msg->coordinate[NAME];// con argomento passo singolo brick
-
-        // punti del boundbox trovati da yolo
-    //detected_Bricks[itr-1].boundBox[X_MIN-1]=msg->coordinate[X_MIN]; 
-    Brick->boundBox[X_MIN-1]=msg->coordinate[X_MIN]; 
-    //detected_Bricks[itr-1].boundBox[Y_MIN-1]=msg->coordinate[Y_MIN];
-    Brick->boundBox[Y_MIN-1]=msg->coordinate[Y_MIN];
-
-    //detected_Bricks[itr-1].boundBox[X_MAX-1]=msg->coordinate[X_MAX];
-    Brick->boundBox[X_MAX-1]=msg->coordinate[X_MAX];
-    //detected_Bricks[itr-1].boundBox[Y_MAX-1]=msg->coordinate[Y_MAX];
-    Brick->boundBox[Y_MAX-1]=msg->coordinate[Y_MAX];
-
-        // dimensioni del blocco ottenute da BRICKS -> HardCoded vedi BrickDimension.h
-    //detected_Bricks[itr-1].x=BRICKS[detected_Bricks[itr-1].name].x;
-    Brick->x=BRICKS[Brick->name].x;
-    //detected_Bricks[itr-1].y=BRICKS[detected_Bricks[itr-1].name].y;
-    Brick->y=BRICKS[Brick->name].y;
-    //detected_Bricks[itr-1].z=BRICKS[detected_Bricks[itr-1].name].z;
-    Brick->z=BRICKS[Brick->name].z;
-  
-}
-
-
-
-void depth_Callback(const sensor_msgs::PointCloud2::ConstPtr& msg, detectedBrick* Brick){
-
-    pcl::PointCloud<pcl::PointXYZ> cloud;
-    pcl::fromROSMsg (*msg, cloud);
     
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloudBrick;
-        /****COPIA PCL2 DEL BRICK A FEATURECLOUD DI DETECTEDBRICK*****/ 
+    if(semaforo){
+      cout<<"itr "<<itr_detectedBrick<<endl;
+      semaforo=false;
+      mtx_brick_struct.lock();
+      thr_compute.push_back(thread(boost::bind(computePosition,brick_map,&detected_Bricks[itr_detectedBrick],&posPub)));
+      mtx_brick_struct.unlock();
+      ctr_detectedBrick+=1;
+      itr_detectedBrick+=1;
+    }
+  }
 
-    //filtro il cloud che ho appena estratto tramite il boundBox per avere meno punti da elaborare aka piu' veloce    
-    const float voxel_grid_size = 0.005f;
-    pcl::VoxelGrid<pcl::PointXYZ> vox_grid;
-    vox_grid.setInputCloud(cloudBrick);
-    vox_grid.setLeafSize(voxel_grid_size, voxel_grid_size, voxel_grid_size);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr tempCloud(
-          new pcl::PointCloud<pcl::PointXYZ>);
-    vox_grid.filter(*tempCloud);
-    cloudBrick = tempCloud;
-    
-    //copio il cloud filtrato sul cloud del brick
-    Brick->cloud.setInputCloud(cloudBrick);
-    computePosition(Brick); //trovo rotazione e posizione del Brick e salvo il tutto nella struct corrispondente
+  coordSub.shutdown();
+
+  for(thread & th : thr_compute){
+      th.join();
+  }
+
+  delete detected_Bricks;
+  return 0;
 }
 
+void cloud_callback(const sensor_msgs::PointCloud2::ConstPtr& msg, pcl::PointCloud<pcl::PointXYZ>::Ptr map){
+    mtx_brick_map.lock();
+    pcl::fromROSMsg (*msg, *map);
+    mtx_brick_map.unlock();
+}
 
-void computePosition(detectedBrick* Brick){
+void computePosition(pcl::PointCloud<pcl::PointXYZ>::ConstPtr map, detectedBrick* Brick, const ros::Publisher* pub){
+  
 
-  //Eigen::Matrix<4,1> position;
-  //pcl::compute3dCentroid({argomento},&position); // per trovare il centroide del cloud riferito al brick
+  mtx.lock();
+  cout<<"my name is "<<Brick->name<<" and im at ";
+  for(int i=0;i<COMPONENTS;++i){
+    cout<<Brick->boundBox[i]<<" ";
+  }
+  cout<<endl;
+  mtx.unlock();
+
+  FeatureCloud feature_Brick;
+  
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_map (new pcl::PointCloud<pcl::PointXYZ>());
+  pcl::PointCloud<pcl::PointXYZ>::Ptr brick (new pcl::PointCloud<pcl::PointXYZ>());
+  pcl::search::OrganizedNeighbor<pcl::PointXYZ>::Ptr tree (new pcl::search::OrganizedNeighbor<pcl::PointXYZ>());
+
+
+  mtx_brick_map.lock();
+  cout<<"copio\n";
+  pcl::copyPointCloud(*map,*cloud_map);
+  mtx_brick_map.unlock();
+  
+ 
+  
+  pcl::PointXYZ point=cloud_map->at(Brick->boundBox[CEN_X-1],Brick->boundBox[CEN_Y-1]);
+
+  mtx.lock();
+  cout<<Brick->boundBox[CEN_X-1]<<" "<<Brick->boundBox[CEN_Y-1]<<endl;
+  cout<<"point at "<<point<<endl;
+  
+  cout<<"number of point of "<<Brick->name<<" in cloudMap "<<cloud_map->size()<<endl;
+
+  mtx.unlock();
+   
+
+  pcl::Indices indices;
+  vector<float> k_distances;
+  
+  tree->setInputCloud(cloud_map);
+  tree->radiusSearch(point,RADIUS,indices,k_distances);
+
+  if(!cloud_map->empty()){
+
+  for(const auto& idx : indices){
+    brick->push_back((*cloud_map)[idx]);
+  }
+  mtx.lock();
+  cout<<"number of point in pointcloud "<<brick->size()<<endl;
+  mtx.unlock();
+  pcl::SACSegmentation<pcl::PointXYZ> seg;
+  pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
+  pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_plane (new pcl::PointCloud<pcl::PointXYZ> ());
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_f (new pcl::PointCloud<pcl::PointXYZ>);
+  seg.setOptimizeCoefficients (true);
+  seg.setModelType (pcl::SACMODEL_PLANE);
+  seg.setMethodType (pcl::SAC_RANSAC);
+  seg.setDistanceThreshold (0.01); // 1cm
+
+  int nr_points = (int) brick->size ();
+  while (brick->size () > 0.3 * nr_points)
+  {
+    // Segment the largest planar component from the remaining cloud
+    seg.setInputCloud (brick);
+    seg.segment (*inliers, *coefficients);
+    // Extract the planar inliers from the input cloud
+    pcl::ExtractIndices<pcl::PointXYZ> extract;
+    extract.setInputCloud (brick);
+    extract.setIndices (inliers);
+    extract.setNegative (false);
+
+    // Get the points associated with the planar surface
+    extract.filter (*cloud_plane);
+
+    // Remove the planar inliers, extract the rest
+    extract.setNegative (true);
+    extract.filter (*cloud_f);
+    *brick= *cloud_f;
+   
+   }
+   *cloud_map=*brick;
+
+
+ 
+    
+     mtx.lock();
+  cout<<"number of point in pointcloud2 "<<brick->size()<<endl;
+  Eigen::Vector4f centroid_3d;
+  int val=compute3DCentroid(*cloud_map,centroid_3d);
+  cout<<"centroid "<<centroid_3d<<endl;
+  cout<<"val "<<val<<endl;
+  mtx.unlock();
+  feature_Brick.setInputCloud(cloud_map);
+  
+  // per trovare il centroide del cloud riferito al brick
   //Brick->initPosition[0]=CAMERA_POSITION[0]-position[0]; // per ora sbagliato ma si rifrisce a x
   //Brick->initPosition[1]=CAMERA_POSITION[1]-position[1]; // per ora sbagliato ma si riferisce a y
   //Brick->initPosition[2]=Brick->z/2; // setto centroide del blocco ad altezza del blocco/2
-
+  
+  
   int vect_DIM = STORE_PCD_TEMPLATES.getDim(Brick->name);
 
   TemplateAlignment template_align; // creo templatecloud per poi usare la funzione interna che mi torna
@@ -192,24 +234,61 @@ void computePosition(detectedBrick* Brick){
     FeatureCloud fc = STORE_PCD_TEMPLATES.getCloud(Brick->name,i);
     template_align.addTemplateCloud(fc);//carico vettore di .pcd
   }
-  template_align.setTargetCloud(Brick->cloud); //carico cloud brick
+  template_align.setTargetCloud(feature_Brick); //carico cloud brick
 
   TemplateAlignment::Result best_alignment;
   int best_index = template_align.findBestAlignment(best_alignment); // computo e mi torna indice del miglior risultato
   const FeatureCloud &best_template = STORE_PCD_TEMPLATES.getCloud(Brick->name,best_index); // non serve
   
-  {
+  
 
   Eigen::Matrix3f rotation = best_alignment.final_transformation.block<3, 3>(0, 0);
   Eigen::Vector3f translation = best_alignment.final_transformation.block<3, 1>(0, 3);
   // risultati di traslazione e rotazione si riferiscono a .pcd best index
-    } 
-  
+  mtx.lock();
+  cout<<"translation "<<translation<<endl<<endl;
+  cout<<"rotation "<<rotation<<endl;
+   // find_edge::brick msg=getMSG(*Brick);
+    //pub.publish(msg);
+  mtx.lock();
+  }else {
+    mtx.lock();
+  cout<<"empty map "<<Brick->name<<endl;
+  mtx.lock();
+  }
+
 }
 
+void cord_callback(const detect::cord::ConstPtr& msg, detectedBrick* Brick){
 
-// semplice copia dei valori per tornare il messaggio del brick passato
+  mtx_brick_struct.lock();
+
+    Brick->name=(int)msg->coordinate[NAME];
+    cout<<Brick->name<<endl;
+
+    Brick->boundBox[X_MIN-1]=(int)msg->coordinate[X_MIN]; 
+    Brick->boundBox[Y_MIN-1]=(int)msg->coordinate[Y_MIN];
+    cout<<Brick->boundBox[X_MIN-1]<<" "<<Brick->boundBox[Y_MIN-1];
+
+
+    Brick->boundBox[X_MAX-1]=(int)msg->coordinate[X_MAX];
+    Brick->boundBox[Y_MAX-1]=(int)msg->coordinate[Y_MAX];
+    cout<<" "<<Brick->boundBox[X_MAX-1]<<" "<<Brick->boundBox[Y_MAX-1]<<" ";
+
+    Brick->boundBox[CEN_X-1]=(int)msg->coordinate[CEN_X]; 
+    Brick->boundBox[CEN_Y]-1=(int)msg->coordinate[CEN_Y];
+    cout<< Brick->boundBox[CEN_X-1]<<" "<<Brick->boundBox[CEN_Y-1]<<" ";
+
+    Brick->x=BRICKS[Brick->name].x;
+    Brick->y=BRICKS[Brick->name].y;
+    Brick->z=BRICKS[Brick->name].z;
+  mtx_brick_struct.unlock();  
+    semaforo=true;
+  
+}
+/*
 find_edge::brick getMSG(const detectedBrick BRICK){
+  
   find_edge::brick msg;
 
   for (int i=0;i<COMPONENTS;++i){
@@ -224,3 +303,21 @@ find_edge::brick getMSG(const detectedBrick BRICK){
 
   return msg;
 }
+*/
+
+
+/*
+
+Class A
+  ciao *
+
+Class B:extend A
+  int1
+  int2
+  int3
+
+
+A* prova(ciao);
+
+ prova (new B[]);
+ */

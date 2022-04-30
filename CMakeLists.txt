@@ -8,16 +8,13 @@ project(find_edge)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
-  cv_bridge
   message_generation
+  std_msgs
   pcl_ros
   roscpp
-  rospy
   sensor_msgs
-  std_msgs
 )
 
-find_package(OpenCV 4 REQUIRED)
 
 
 ## System dependencies are found with CMake's conventions
@@ -58,7 +55,6 @@ find_package(OpenCV 4 REQUIRED)
    FILES
 #   Message1.msg
 #   Message2.msg
-   cord.msg
    brick.msg
  )
 
@@ -115,7 +111,7 @@ find_package(OpenCV 4 REQUIRED)
 catkin_package(
   INCLUDE_DIRS include/${PROJECT_NAME}
   LIBRARIES src/${PROJECT_NAME}
-  CATKIN_DEPENDS message_runtime pcl_ros roscpp rospy sensor_msgs std_msgs 
+  CATKIN_DEPENDS message_runtime pcl_ros roscpp sensor_msgs message_generation std_msgs
   #  DEPENDS system_lib
 )
 
@@ -146,6 +142,7 @@ add_library(${PROJECT_NAME}
 add_executable(getPosition nodes/getPosition.cpp src/${PROJECT_NAME}/FeatureCloud.cpp src/${PROJECT_NAME}/TemplateAlignment.cpp src/${PROJECT_NAME}/pcdFileStore.cpp)
 #target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES})
 target_link_libraries(getPosition ${catkin_LIBRARIES})
+add_dependencies(getPosition ${catkin_EXPORTED_TARGETS})
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries
 ## either from message generation or dynamic reconfigure

@@ -23,7 +23,7 @@ vector<vector<FeatureCloud>> StoreClass::loadPcdFile(string _loadFile)const{
     while (fileList.good()) { 
         getline(fileList, fileName);
         if (fileName.empty() || fileName.at(0) == '#') continue;
-
+        cout<<fileName<<endl;
         ifstream pcdClassFile(fileName);
         vector<FeatureCloud> classTemplate;
         FeatureCloud template_cloud;
@@ -31,7 +31,7 @@ vector<vector<FeatureCloud>> StoreClass::loadPcdFile(string _loadFile)const{
         while(pcdClassFile.good()){
             getline(pcdClassFile, pcdFileName);
             if (pcdFileName.empty() || pcdFileName.at(0) == '#') continue;
-            
+            cout<<pcdFileName<<endl;
             template_cloud.loadInputCloud(pcdFileName);
             classTemplate.push_back(template_cloud);
         }
